@@ -502,11 +502,21 @@ public class GroupedComboBox : ComboBox, IComparer {
 				e.Graphics.FillRectangle(SystemBrushes.Highlight, e.Bounds);
 				e.Graphics.FillRectangle(new SolidBrush(BackColor), groupBounds);
 			}
-            else if (!comboBoxEdit) {
-                // use the default background-painting logic
-                e.DrawBackground();
-            }
-
+			else if (!comboBoxEdit) {
+		                // use the default background-painting logic
+		                e.DrawBackground();
+			}
+			else
+			{
+				// Paint the background color, if set to a non-default value
+				if (BackColor != SystemColors.Window)
+				{
+					var bgBounds = e.Bounds;
+					bgBounds.Inflate(2, 2);
+					e.Graphics.FillRectangle(new SolidBrush(BackColor), bgBounds);
+				}
+			}
+   
 			// render group header text
 			if (isGroupStart) TextRenderer.DrawText(
 				e.Graphics, 
