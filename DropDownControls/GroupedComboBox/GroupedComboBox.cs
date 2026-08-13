@@ -103,8 +103,11 @@ public class GroupedComboBox : ComboBox, IComparer {
 	private BindingSource _bindingSource;		                // used for change detection and grouping
 	private Font _groupFont;					                // for painting
 	private string _groupMember;                                // name of group-by property
+	private string _enabledMember;                              // name of item-enabled property
 	private PropertyDescriptor _valueProperty;                  // used to get list item values
 	private PropertyDescriptor _groupProperty;                  // used to get group-by values
+	private PropertyDescriptor _enabledProperty;                // used to get item-enabled values
+	private int _lastEnabledIndex = -1;                         // revert target when a disabled item is picked
 	private ArrayList _internalItems;			                // internal sorted collection of items
     private BindingSource _internalSource;                      // binds sorted collection to the combobox
 	private TextFormatFlags _textFormatFlags;	                // used in measuring/painting
@@ -164,8 +167,21 @@ public class GroupedComboBox : ComboBox, IComparer {
 		}
 	}
 	/// <summary>
-	/// Gets or sets an implementation of the <see cref="IComparer"/> interface 
-	/// that sorts the items in the control. It will be applied separately to 
+	/// Gets or sets the name of a boolean property that determines whether an item can be selected.
+	/// Items whose property value is false are drawn grayed-out, and user selections of them are
+	/// reverted to the last enabled selection. Programmatic selection is not restricted.
+	/// </summary>
+	[DefaultValue("")]
+	public string EnabledMember {
+		get { return _enabledMember; }
+		set {
+			_enabledMember = value;
+			if (_bindingSource != null) SyncInternalItems();
+		}
+	}
+	/// <summary>
+	/// Gets or sets an implementation of the <see cref="IComparer"/> interface
+	/// that sorts the items in the control. It will be applied separately to
 	/// the group headings. The default value is <see cref="Comparer.Default"/>.
 	/// </summary>
 	[Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -223,6 +239,7 @@ public class GroupedComboBox : ComboBox, IComparer {
 	public GroupedComboBox() {
 		base.DrawMode = DrawMode.OwnerDrawVariable;
 		_groupMember = String.Empty;
+		_enabledMember = String.Empty;
 		_sortMode = GroupItemSortModes.Display;
 		_internalItems = new ArrayList();
 		_textFormatFlags = TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter;
@@ -399,7 +416,67 @@ public class GroupedComboBox : ComboBox, IComparer {
     }
 
 	/// <summary>
-	/// Determines whether the list item at the specified index is the start of a new group. In all 
+	/// Determines whether the list item at the specified index can be selected, per the
+	/// <see cref="EnabledMember"/> property. Items are enabled unless the property explicitly says otherwise.
+	/// </summary>
+	/// <param name="index"></param>
+	/// <returns></returns>
+	private bool IsItemEnabled(int index) {
+		if ((_enabledProperty == null) || (index < 0) || (index >= Items.Count)) return true;
+		return !false.Equals(_enabledProperty.GetValue(Items[index]));
+	}
+
+	/// <summary>
+	/// Tracks the most recent enabled selection so a disabled pick has somewhere to revert to.
+	/// </summary>
+	/// <param name="e"></param>
+	protected override void OnSelectedIndexChanged(EventArgs e) {
+		base.OnSelectedIndexChanged(e);
+		if (IsItemEnabled(SelectedIndex)) _lastEnabledIndex = SelectedIndex;
+	}
+
+	/// <summary>
+	/// Finds the nearest enabled item from <paramref name="start"/> (exclusive) walking in
+	/// <paramref name="direction"/> (+1/-1), or -1 when none exists.
+	/// </summary>
+	/// <param name="start"></param>
+	/// <param name="direction"></param>
+	/// <returns></returns>
+	private int FindEnabledIndex(int start, int direction) {
+		for (int i = start + direction; (i >= 0) && (i < Items.Count); i += direction) {
+			if (IsItemEnabled(i)) return i;
+		}
+		return -1;
+	}
+
+	/// <summary>
+	/// Rejects user selections of disabled items. Only user-committed selections pass through here,
+	/// so programmatic selection (e.g. data binding restoring a saved value) is unaffected.
+	/// Closed-combo commits come from directional navigation (arrow keys, mouse wheel), where
+	/// reverting would trap the selection against the disabled item — those skip past it in the
+	/// direction of travel. Open-list commits are explicit picks (click, Enter); those revert to
+	/// the last enabled selection so a misclick cannot silently land on an unrelated item, or clear
+	/// the selection when that target is gone or has itself become disabled.
+	/// </summary>
+	/// <param name="e"></param>
+	protected override void OnSelectionChangeCommitted(EventArgs e) {
+		int committed = SelectedIndex;
+		if (!IsItemEnabled(committed)) {
+			int replacement = -1;
+			if (!DroppedDown) {
+				int direction = ((_lastEnabledIndex >= 0) && (committed < _lastEnabledIndex)) ? -1 : 1;
+				replacement = FindEnabledIndex(committed, direction);
+			}
+			if ((replacement < 0) && (_lastEnabledIndex >= 0) && (_lastEnabledIndex < Items.Count) && IsItemEnabled(_lastEnabledIndex)) {
+				replacement = _lastEnabledIndex;
+			}
+			SelectedIndex = replacement;
+		}
+		base.OnSelectionChangeCommitted(e);
+	}
+
+	/// <summary>
+	/// Determines whether the list item at the specified index is the start of a new group. In all
 	/// cases, populates the string respresentation of the group that the item belongs to.
 	/// </summary>
 	/// <param name="index"></param>
@@ -476,7 +553,7 @@ public class GroupedComboBox : ComboBox, IComparer {
 
 			// the item text will appear in a different colour, depending on its state
 			Color textColor;
-			if (disabled)
+			if (disabled || !IsItemEnabled(e.Index))
 				textColor = SystemColors.GrayText;
 			else if (!comboBoxEdit && selected)
 				textColor = SystemColors.HighlightText;
@@ -598,6 +675,15 @@ public class GroupedComboBox : ComboBox, IComparer {
 		foreach (PropertyDescriptor descriptor in props) {
 			if (descriptor.Name.Equals(_groupMember)) {
 				_groupProperty = descriptor;
+				break;
+			}
+		}
+
+		// locate the property descriptor that corresponds to the value of EnabledMember
+		_enabledProperty = null;
+		foreach (PropertyDescriptor descriptor in props) {
+			if (descriptor.Name.Equals(_enabledMember)) {
+				_enabledProperty = descriptor;
 				break;
 			}
 		}
